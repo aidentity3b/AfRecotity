@@ -6,6 +6,7 @@ using UnityEngine.UI;
 using UniRx;
 using UniRx.Triggers;
 using System;
+using SFB;
 
 public class RecordingManager : MonoBehaviour
 {
@@ -21,24 +22,37 @@ public class RecordingManager : MonoBehaviour
     private Image BG;
     [SerializeField]
     AlertManager alertManager;
-
+    [SerializeField]
+    Button RecordButton;
+    [SerializeField]
+    private AudioSource Recorder;
+    [SerializeField]
+    private AudioSource Player;
+    [SerializeField]
+    InputField videoUrl;
     [SerializeField]
     Button[] ControlButtons;
+    [SerializeField]
+    ReviewingManager reviewer;
 
     bool focusOnSeekBar = false;
     float lengthSec;
+    int recordOffset = 0;
+    double startTime = 0;
 
+    private AudioClip TemporarySound;
+    private AudioClip MasterSound;
     private bool seekChangingByPlaying = false;
-
     private enum PlayingStateType
     {
         None, Playing, Recording, Pausing, Seeking
     }
     private PlayingStateType PlayingState = PlayingStateType.None;
+    private bool atLoading = false;
+
     // Use this for initialization
     void Start()
     {
-
         foreach (Button b in ControlButtons)
         {
             b.interactable = false;
@@ -71,7 +85,6 @@ public class RecordingManager : MonoBehaviour
         {
             float rawTime = (float)vp.time;
             float remainTime = rawTime;
-            //
             int minute = Mathf.FloorToInt(remainTime / 60f);
             remainTime -= minute * 60;
             int second = Mathf.FloorToInt(remainTime);
@@ -85,38 +98,38 @@ public class RecordingManager : MonoBehaviour
                 seekChangingByPlaying = true;
                 SeekBar.value = (float)(vp.time / lengthSec);
                 seekChangingByPlaying = false;
-                
-            }/*
-            if (Player.time - (float)vp.time >= 0.2)
-            {
-                Player.time = (float)vp.time;
-                //Player.Play();
-            }*/
+            }
         }
         else if (PlayingState == PlayingStateType.None)
         {
             string builtTimeText = $"-:-:-";
             TimeText.text = builtTimeText;
         }
-        if (Microphone.IsRecording(Microphone.devices[0]))
-        {
-            if (true || Math.Abs(Recorder.timeSamples - Microphone.GetPosition(Microphone.devices[0])) > 500)
-            {
-                //fix position
-                Debug.Log(Math.Abs(Recorder.timeSamples - Microphone.GetPosition(Microphone.devices[0])));
-                Recorder.timeSamples = Microphone.GetPosition(Microphone.devices[0]);
-            }
-        }
-        float[] data = new float[256];
+        float[] data = new float[64];
         float a = 0;
         Recorder.GetOutputData(data, 0);
         foreach (float s in data)
         {
             a += Mathf.Abs(s);
         }
-        MicLevel.rectTransform.sizeDelta = new Vector2(a * 10, 50);
+        MicLevel.rectTransform.sizeDelta = new Vector2(a * 40, 50);
     }
-    int recordOffset = 0;
+    private void FixedUpdate()
+    {
+        if (Microphone.IsRecording(Microphone.devices[0]))
+        {
+            if (Recorder.timeSamples - Microphone.GetPosition(Microphone.devices[0]) > 500)
+            {
+                //fix position
+                Debug.Log(Math.Abs(Recorder.timeSamples - Microphone.GetPosition(Microphone.devices[0])));
+                int pos = Microphone.GetPosition(Microphone.devices[0]);
+                if (pos >= 300)
+                {
+                    Recorder.timeSamples = Microphone.GetPosition(Microphone.devices[0]) - 300;
+                }
+            }
+        }
+    }
     public void Play()
     {
         if (PlayingState == PlayingStateType.Recording) StopRecording();
@@ -125,8 +138,6 @@ public class RecordingManager : MonoBehaviour
         Player.Play();
         PlayingState = PlayingStateType.Playing;
     }
-    [SerializeField]
-    Button RecordButton;
     public void Pause()
     {
         if (PlayingState == PlayingStateType.Recording) StopRecording();
@@ -144,14 +155,21 @@ public class RecordingManager : MonoBehaviour
         Player.Stop();
         PlayingState = PlayingStateType.None;
     }
-    [SerializeField]
-    private AudioSource Recorder;
-    [SerializeField]
-    private AudioSource Player;
+    public void PickVideoFile()
+    {
+        StandaloneFileBrowser.OpenFilePanelAsync("ビデオを開く", "", "", false,
+            x =>
+           {
+               Debug.Log("CALLBACK");
+               if (x.Length == 1)
+               {
+                   Debug.Log(x[0]);
+                   videoUrl.text = x[0];
+                   LoadClip(x[0]);
+               }
+           });
 
-    private AudioClip TemporarySound;
-    private AudioClip MasterSound;
-
+    }
     public void LoadClip(InputField clip)
     {
         LoadClip(clip.text);
@@ -160,20 +178,23 @@ public class RecordingManager : MonoBehaviour
     {
         Stop();
         vp.url = clip;
+        atLoading = true;
         vp.Prepare();
     }
-
     public void LoadClip(VideoClip clip)
     {
         Stop();
         vp.clip = clip;
+        atLoading = true;
         vp.Prepare();
     }
     public void LoadClip(VideoPlayer source)
     {
+        if (!atLoading) return;
+        atLoading = false;
         //if (!vp.clip) return;
         lengthSec = vp.frameCount / vp.frameRate;
-        foreach (Button b  in ControlButtons)
+        foreach (Button b in ControlButtons)
         {
             b.interactable = true;
         }
@@ -185,7 +206,6 @@ public class RecordingManager : MonoBehaviour
         MasterSound = AudioClip.Create("master", 44100 * Mathf.CeilToInt(lengthSec), TemporarySound.channels, 44100, false);
         Player.clip = MasterSound;
     }
-    double startTime = 0;
     public void StartRecording()
     {
         if (!(PlayingState == PlayingStateType.Pausing)) return;
@@ -199,8 +219,6 @@ public class RecordingManager : MonoBehaviour
         PlayingState = PlayingStateType.Recording;
         BG.color = new Color(1, 0.4f, 0.5f);
     }
-    [SerializeField]
-    ReviewingManager reviewer;
     public void StopRecording()
     {
         if (!(PlayingState == PlayingStateType.Recording)) return;
@@ -209,7 +227,9 @@ public class RecordingManager : MonoBehaviour
         Recorder.Stop();
         vp.Pause();
         Player.Pause();
-        reviewer.StartReviewing(this, vp, Recorder, MasterSound, startTime, endPos);
+        PlayingState = PlayingStateType.Pausing;
+        Recorder.mute = false;
+        reviewer.StartReviewing(this, vp, Recorder, MasterSound, startTime, endPos, Player);
 
         double length = vp.time - startTime;
 
@@ -226,8 +246,7 @@ public class RecordingManager : MonoBehaviour
         Recorder.clip = TemporarySound;
         Recorder.Play();
         Player.Pause();*/
-        PlayingState = PlayingStateType.Pausing;
-        BG.color = new Color(0,0,0);
+        BG.color = new Color(0, 0, 0);
     }
 
     public void ReturnFromReviewing(AudioClip master)
